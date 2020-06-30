@@ -426,6 +426,10 @@ export class PullRequestManager implements vscode.Disposable {
 		return this._credentialStore;
 	}
 
+	get repositories(): GitHubRepository[] {
+		return this._githubRepositories;
+	}
+
 	async clearCredentialCache(): Promise<void> {
 		await this._credentialStore.reset();
 		this.state = PRManagerState.Initializing;
