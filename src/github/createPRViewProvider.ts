@@ -7,29 +7,11 @@ import * as vscode from 'vscode';
 import { byRemoteName, DetachedHeadError, FolderRepositoryManager, PullRequestDefaults, titleAndBodyFrom } from './folderRepositoryManager';
 import webviewContent from '../../media/createPR-webviewIndex.js';
 import { getNonce, IRequestMessage, WebviewViewBase } from '../common/webview';
-import { PR_SETTINGS_NAMESPACE, PR_TITLE } from '../common/settingKeys';
 import { OctokitCommon } from './common';
 import { PullRequestModel } from './pullRequestModel';
 import Logger from '../common/logger';
 import { PullRequestGitHelper } from './pullRequestGitHelper';
-
-export type PullRequestTitleSource = 'commit' | 'branch' | 'custom' | 'ask';
-
-export enum PullRequestTitleSourceEnum {
-	Commit = 'commit',
-	Branch = 'branch',
-	Custom = 'custom',
-	Ask = 'ask'
-}
-
-export type PullRequestDescriptionSource = 'template' | 'commit' | 'custom' | 'ask';
-
-export enum PullRequestDescriptionSourceEnum {
-	Template = 'template',
-	Commit = 'commit',
-	Custom = 'custom',
-	Ask = 'ask'
-}
+import { Branch, RefType } from '../api/api';
 
 interface RemoteInfo {
 	owner: string;
@@ -42,19 +24,26 @@ export class CreatePullRequestViewProvider extends WebviewViewBase implements vs
 	private _onDone = new vscode.EventEmitter<PullRequestModel | undefined>();
 	readonly onDone: vscode.Event<PullRequestModel | undefined> = this._onDone.event;
 
-	private _onDidChangeSelectedRemote = new vscode.EventEmitter<RemoteInfo>();
-	readonly onDidChangeSelectedRemote: vscode.Event<RemoteInfo> = this._onDidChangeSelectedRemote.event;
+	private _onDidChangeBaseRemote = new vscode.EventEmitter<RemoteInfo>();
+	readonly onDidChangeBaseRemote: vscode.Event<RemoteInfo> = this._onDidChangeBaseRemote.event;
 
-	private _onDidChangeSelectedBranch = new vscode.EventEmitter<string>();
-	readonly onDidChangeSelectedBranch: vscode.Event<string> = this._onDidChangeSelectedBranch.event;
+	private _onDidChangeBaseBranch = new vscode.EventEmitter<string>();
+	readonly onDidChangeBaseBranch: vscode.Event<string> = this._onDidChangeBaseBranch.event;
+
+	private _onDidChangeCompareBranch = new vscode.EventEmitter<string>();
+	readonly onDidChangeCompareBranch: vscode.Event<string> = this._onDidChangeCompareBranch.event;
+
+	private _firstLoad: boolean = true;
 
 	constructor(
 		private readonly _extensionUri: vscode.Uri,
 		private readonly _folderRepositoryManager: FolderRepositoryManager,
 		private readonly _pullRequestDefaults: PullRequestDefaults,
-		private readonly _isDraft: boolean
+		compareBranch: Branch,
 	) {
 		super();
+
+		this._compareBranch = compareBranch;
 	}
 
 	public resolveWebviewView(
@@ -77,49 +66,61 @@ export class CreatePullRequestViewProvider extends WebviewViewBase implements vs
 
 		webviewView.webview.html = this._getHtmlForWebview();
 
-		this.initializeParams();
-	}
-
-	private async getTitle(): Promise<string> {
-		const method = vscode.workspace.getConfiguration(PR_SETTINGS_NAMESPACE).get<PullRequestTitleSource>(PR_TITLE, PullRequestTitleSourceEnum.Ask);
-
-		switch (method) {
-
-			case PullRequestTitleSourceEnum.Branch:
-				return this._folderRepositoryManager.repository.state.HEAD!.name!;
-
-			case PullRequestTitleSourceEnum.Commit:
-				return titleAndBodyFrom(await this._folderRepositoryManager.getHeadCommitMessage()).title;
-
-			case PullRequestTitleSourceEnum.Custom:
-				return '';
-
-			default:
-				// Use same default as GitHub, if there is only one commit, use the commit, otherwise use the branch name.
-				// By default, the base branch we use for comparison is the base branch of origin. Compare this to the
-				// current local branch if it has a GitHub remote.
-				const origin = await this._folderRepositoryManager.getOrigin();
-				const repositoryHead = this._folderRepositoryManager.repository.state.HEAD;
-
-				let hasMultipleCommits = true;
-				if (repositoryHead?.upstream) {
-					const headRepo = this._folderRepositoryManager.findRepo(byRemoteName(repositoryHead?.upstream.remote));
-					if (headRepo) {
-						const headBranch = `${headRepo.remote.owner}:${repositoryHead.name}`;
-						const commits = await origin.compareCommits(this._pullRequestDefaults.base, headBranch);
-						hasMultipleCommits = commits.total_commits > 1;
-					}
-				}
-
-				if (hasMultipleCommits) {
-					return this._folderRepositoryManager.repository.state.HEAD!.name!;
-				} else {
-					return titleAndBodyFrom(await this._folderRepositoryManager.getHeadCommitMessage()).title;
-				}
+		if (this._firstLoad) {
+			this._firstLoad = false;
+			// Reset any stored state.
+			// TODO @RMacfarlane Clear stored state on extension deactivation instead.
+			this.initializeParams(true);
+		} else {
+			this.initializeParams();
 		}
 	}
 
-	private async getPullRequestTemplate(): Promise<string> {
+	private _compareBranch: Branch;
+	get compareBranch() {
+		return this._compareBranch;
+	}
+
+	set compareBranch(compareBranch: Branch) {
+		this._compareBranch = compareBranch;
+		if (compareBranch && compareBranch.name !== this._compareBranch.name) {
+			void this.initializeParams(true);
+			this._onDidChangeCompareBranch.fire(this._compareBranch.name!);
+		}
+	}
+
+	public show(compareBranch?: Branch): void {
+		if (compareBranch) {
+			this.compareBranch = compareBranch;
+		}
+
+		super.show();
+	}
+
+	private async getTitle(): Promise<string> {
+		// Use same default as GitHub, if there is only one commit, use the commit, otherwise use the branch name.
+		// By default, the base branch we use for comparison is the base branch of origin. Compare this to the
+		// compare branch if it has a GitHub remote.
+		const origin = await this._folderRepositoryManager.getOrigin(this._compareBranch);
+
+		let hasMultipleCommits = false;
+		if (this.compareBranch.upstream) {
+			const headRepo = this._folderRepositoryManager.findRepo(byRemoteName(this.compareBranch.upstream.remote));
+			if (headRepo) {
+				const headBranch = `${headRepo.remote.owner}:${this.compareBranch.name ?? ''}`;
+				const commits = await origin.compareCommits(this._pullRequestDefaults.base, headBranch);
+				hasMultipleCommits = commits.total_commits > 1;
+			}
+		}
+
+		if (hasMultipleCommits) {
+			return this.compareBranch.name!;
+		} else {
+			return titleAndBodyFrom(await this._folderRepositoryManager.getTipCommitMessage(this.compareBranch.name!)).title;
+		}
+	}
+
+	private async getPullRequestTemplate(): Promise<string | undefined> {
 		const templateUris = await this._folderRepositoryManager.getPullRequestTemplates();
 		if (templateUris[0]) {
 			try {
@@ -127,36 +128,21 @@ export class CreatePullRequestViewProvider extends WebviewViewBase implements vs
 				return templateContent.toString();
 			} catch (e) {
 				Logger.appendLine(`Reading pull request template failed: ${e}`);
-				return '';
+				return undefined;
 			}
 		}
 
-		return '';
+		return undefined;
 	}
 
 	private async getDescription(): Promise<string> {
-		const method = vscode.workspace.getConfiguration('githubPullRequests').get<PullRequestDescriptionSource>('pullRequestDescription', PullRequestDescriptionSourceEnum.Ask);
-
-		switch (method) {
-
-			case PullRequestDescriptionSourceEnum.Template:
-				return this.getPullRequestTemplate();
-
-			case PullRequestDescriptionSourceEnum.Commit:
-				return titleAndBodyFrom(await this._folderRepositoryManager.getHeadCommitMessage()).body;
-
-			case PullRequestDescriptionSourceEnum.Custom:
-				return '';
-
-			default:
-				// Try to match github's default, first look for template, then use commit body if available.
-				const pullRequestTemplate = this.getPullRequestTemplate();
-				return pullRequestTemplate ?? titleAndBodyFrom(await this._folderRepositoryManager.getHeadCommitMessage()).body ?? '';
-		}
+		// Try to match github's default, first look for template, then use commit body if available.
+		const pullRequestTemplate = this.getPullRequestTemplate();
+		return (await pullRequestTemplate) ?? titleAndBodyFrom(await this._folderRepositoryManager.getTipCommitMessage(this.compareBranch.name!)).body ?? '';
 	}
 
-	public async initializeParams(): Promise<void> {
-		if (!this._folderRepositoryManager.repository.state.HEAD) {
+	public async initializeParams(reset: boolean = false): Promise<void> {
+		if (!this.compareBranch) {
 			throw new DetachedHeadError(this._folderRepositoryManager.repository);
 		}
 
@@ -165,37 +151,35 @@ export class CreatePullRequestViewProvider extends WebviewViewBase implements vs
 			repositoryName: this._pullRequestDefaults.repo
 		};
 
-		Promise.all([
+		const [githubRemotes, branchesForRemote, defaultTitle, defaultDescription] = await Promise.all([
 			this._folderRepositoryManager.getGitHubRemotes(),
 			this._folderRepositoryManager.listBranches(this._pullRequestDefaults.owner, this._pullRequestDefaults.repo),
 			this.getTitle(),
 			this.getDescription()
-		]).then(result => {
-			const [githubRemotes, branchesForRemote, defaultTitle, defaultDescription] = result;
+		]);
+		const remotes: RemoteInfo[] = githubRemotes.map(remote => {
+			return {
+				owner: remote.owner,
+				repositoryName: remote.repositoryName
+			};
+		});
 
-			const remotes: RemoteInfo[] = githubRemotes.map(remote => {
-				return {
-					owner: remote.owner,
-					repositoryName: remote.repositoryName
-				};
-			});
-
-			this._postMessage({
-				command: 'pr.initialize',
-				params: {
-					availableRemotes: remotes,
-					defaultRemote,
-					defaultBranch: this._pullRequestDefaults.base,
-					branchesForRemote,
-					defaultTitle,
-					defaultDescription,
-					isDraft: this._isDraft
-				}
-			});
+		this._postMessage({
+			command: reset ? 'reset' : 'pr.initialize',
+			params: {
+				availableRemotes: remotes,
+				defaultRemote,
+				defaultBranch: this._pullRequestDefaults.base,
+				branchesForRemote,
+				defaultTitle,
+				defaultDescription,
+				compareBranch: this.compareBranch.name!,
+				isDraft: false
+			}
 		});
 	}
 
-	private async changeRemote(message: IRequestMessage<{ owner: string, repositoryName: string }>): Promise<void> {
+	private async changeBaseRemote(message: IRequestMessage<{ owner: string, repositoryName: string }>): Promise<void> {
 		const { owner, repositoryName } = message.args;
 		const githubRepository = this._folderRepositoryManager.findRepo(repo => owner === repo.remote.owner && repositoryName === repo.remote.repositoryName);
 
@@ -205,20 +189,41 @@ export class CreatePullRequestViewProvider extends WebviewViewBase implements vs
 
 		const defaultBranch = await githubRepository.getDefaultBranch();
 		const newBranches = await this._folderRepositoryManager.listBranches(owner, repositoryName);
-		this._onDidChangeSelectedRemote.fire({ owner, repositoryName });
+		this._onDidChangeBaseRemote.fire({ owner, repositoryName });
 		return this._replyMessage(message, { branches: newBranches, defaultBranch });
 	}
 
 	private async create(message: IRequestMessage<OctokitCommon.PullsCreateParams>): Promise<void> {
 		try {
-			if (!this._folderRepositoryManager.repository.state.HEAD!.upstream) {
-				throw new DetachedHeadError(this._folderRepositoryManager.repository);
+			let branchName;
+			let remote;
+			if (this.compareBranch.type === RefType.RemoteHead) {
+				const index = this.compareBranch.name!.indexOf('/');
+				branchName = this.compareBranch.name!.substring(index + 1);
+				remote = this.compareBranch.name!.substring(0, index);
+			} else {
+				branchName = this.compareBranch.name!;
+				remote = this.compareBranch.upstream?.remote;
 			}
 
-			const branchName = this._folderRepositoryManager.repository.state.HEAD!.name!;
-			const headRepo = this._folderRepositoryManager.findRepo(byRemoteName(this._folderRepositoryManager.repository.state.HEAD!.upstream.remote));
+			if (!remote) {
+				// We assume this happens only when the compare branch is based on the current branch.
+				const shouldPushUpstream = await vscode.window.showInformationMessage(`There is currently no upstream branch for '${branchName}'. Do you want to publish it and try again?`, { modal: true }, 'Yes');
+				if (shouldPushUpstream === 'Yes') {
+					await vscode.commands.executeCommand('git.publish');
+					if (this._folderRepositoryManager.repository.state.HEAD) {
+						this.compareBranch = this._folderRepositoryManager.repository.state.HEAD;
+						remote = this.compareBranch.upstream?.remote;
+					}
+				} else {
+					this._throwError(message, 'No upstream for the compare branch.');
+					return;
+				}
+			}
+
+			const headRepo = this._folderRepositoryManager.findRepo(byRemoteName(remote!));
 			if (!headRepo) {
-				throw new Error(`Unable to find GitHub repository matching '${this._folderRepositoryManager.repository.state.HEAD!.upstream.remote}'.`);
+				throw new Error(`Unable to find GitHub repository matching '${remote}'.`);
 			}
 
 			const head = `${headRepo.remote.owner}:${branchName}`;
@@ -226,7 +231,7 @@ export class CreatePullRequestViewProvider extends WebviewViewBase implements vs
 
 			// Create was cancelled
 			if (!createdPR) {
-				this._throwError(message, undefined);
+				this._throwError(message, 'There must be a difference in commits to create a pull request.');
 			} else {
 				await this._replyMessage(message, {});
 				await PullRequestGitHelper.associateBranchWithPullRequest(this._folderRepositoryManager.repository, createdPR, branchName);
@@ -254,11 +259,15 @@ export class CreatePullRequestViewProvider extends WebviewViewBase implements vs
 			case 'pr.create':
 				return this.create(message);
 
-			case 'pr.changeRemote':
-				return this.changeRemote(message);
+			case 'pr.changeBaseRemote':
+				return this.changeBaseRemote(message);
 
-			case 'pr.changeBranch':
-				this._onDidChangeSelectedBranch.fire(message.args);
+			case 'pr.changeBaseBranch':
+				this._onDidChangeBaseBranch.fire(message.args);
+				return;
+
+			case 'pr.changeCompareBranch':
+				this._onDidChangeCompareBranch.fire(message.args);
 				return;
 
 			default:

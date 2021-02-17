@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as React from 'react';
-import { useContext, useState, useEffect } from 'react';
+import { useContext, useState, useEffect, useRef } from 'react';
 import { render } from 'react-dom';
 import PullRequestContext, { CreateParams } from '../common/createContext';
 import { gitCompareIcon, repoIcon } from '../components/icon';
@@ -15,9 +15,11 @@ export function main() {
 			const ctx = useContext(PullRequestContext);
 			const [isBusy, setBusy] = useState(false);
 
-			function updateSelectedBranch(branch: string): void {
-				ctx.changeBranch(branch);
-				ctx.updateState({ selectedBranch: branch });
+			const titleInput = useRef<HTMLInputElement>();
+
+			function updateBaseBranch(branch: string): void {
+				ctx.changeBaseBranch(branch);
+				ctx.updateState({ baseBranch: branch });
 			}
 
 			function updateTitle(title: string): void {
@@ -28,17 +30,22 @@ export function main() {
 
 			async function create(): Promise<void> {
 				setBusy(true);
-				await ctx.submit();
+				const hasValidTitle = await ctx.validate();
+				if (!hasValidTitle) {
+					titleInput.current.focus();
+				} else {
+					await ctx.submit();
+				}
 				setBusy(false);
 			}
 
 			return <div>
-				Choose a branch to compare to the current branch.
+				Choose a base branch to compare the '<b>{params.compareBranch}</b>' branch to.
 
-				<div className='wrapper'>
-					{repoIcon}<select value={`${params.selectedRemote?.owner}/${params.selectedRemote?.repositoryName}`} onChange={(e) => {
+				<div className='wrapper flex'>
+					{repoIcon}<select value={`${params.baseRemote?.owner}/${params.baseRemote?.repositoryName}`} onChange={(e) => {
 						const [owner, repositoryName] = e.currentTarget.value.split('/');
-						ctx.changeRemote(owner, repositoryName);
+						ctx.changeBaseRemote(owner, repositoryName);
 					}}>
 						{params.availableRemotes.map(param => {
 							const value = param.owner + '/' + param.repositoryName;
@@ -54,8 +61,8 @@ export function main() {
 					</select>
 				</div>
 
-				<div className='wrapper'>
-					{gitCompareIcon}<select value={params.selectedBranch} onChange={(e) => updateSelectedBranch(e.currentTarget.value)}>
+				<div className='wrapper flex'>
+					{gitCompareIcon}<select value={params.baseBranch} onChange={(e) => updateBaseBranch(e.currentTarget.value)}>
 						{params.branchesForRemote.map(branchName =>
 							<option
 								key={branchName}
@@ -67,21 +74,32 @@ export function main() {
 				</div>
 
 				<div className='wrapper'>
-					<input type='text' name='title' className={params.showTitleValidationError ? 'input-error' : ''} placeholder='Pull Request Title' value={params.pendingTitle} required onChange={(e) => updateTitle(e.currentTarget.value)}></input>
-					<div className={params.showTitleValidationError ? 'validation-error below-input-error' : 'hidden'}>A title is required.</div>
+					<input
+						type='text'
+						ref={titleInput}
+						name='title'
+						className={params.showTitleValidationError ? 'input-error' : ''}
+						aria-invalid={!!params.showTitleValidationError}
+						aria-describedBy={params.showTitleValidationError ? 'title-error' : ''}
+						placeholder='Pull Request Title'
+						value={params.pendingTitle}
+						required
+						onChange={(e) => updateTitle(e.currentTarget.value)}>
+					</input>
+					<div id='title-error' className={params.showTitleValidationError ? 'validation-error below-input-error' : 'hidden'}>A title is required.</div>
 				</div>
 
 				<div className='wrapper'>
 					<textarea name='description' placeholder='Pull Request Description' value={params.pendingDescription} required onChange={(e) => ctx.updateState({ pendingDescription: e.currentTarget.value })}></textarea>
 				</div>
 
-				<div className={params.validate && !!params.createError ? 'wrapper validation-error' : 'hidden'}>
+				<div className={params.validate && !!params.createError ? 'wrapper validation-error' : 'hidden'} aria-live='assertive'>
 					{params.createError}
 				</div>
 
-				<div className='wrapper'>
-					<input type='checkbox' name='draft' checked={params.isDraft} onClick={() => ctx.updateState({ isDraft: !params.isDraft })}></input>
-					<label htmlFor='checkbox'>Create as draft</label>
+				<div className='wrapper flex'>
+					<input id='draft-checkbox' type='checkbox' name='draft' checked={params.isDraft} onClick={() => ctx.updateState({ isDraft: !params.isDraft })}></input>
+					<label htmlFor='draft-checkbox'>Create as draft</label>
 				</div>
 
 				<div className='actions'>

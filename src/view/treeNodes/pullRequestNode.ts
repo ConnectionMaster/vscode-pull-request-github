@@ -35,7 +35,6 @@ export interface ThreadData {
 	uri: vscode.Uri;
 	range: vscode.Range;
 	comments: IComment[];
-	collapsibleState: vscode.CommentThreadCollapsibleState;
 }
 
 export function getDocumentThreadDatas(
@@ -68,8 +67,7 @@ export function getDocumentThreadDatas(
 			threadId: firstComment.id.toString(),
 			uri: uri,
 			range,
-			comments,
-			collapsibleState: vscode.CommentThreadCollapsibleState.Expanded
+			comments
 		});
 	}
 
@@ -523,9 +521,6 @@ export class PRNode extends TreeNode implements CommentHandler, vscode.Commentin
 
 				if (matchingCommentThreads.length === 0) {
 					added.push(thread);
-					if (thread.uri.scheme === 'file') {
-						thread.collapsibleState = vscode.CommentThreadCollapsibleState.Collapsed;
-					}
 				}
 
 				matchingCommentThreads.forEach(existingThread => {
@@ -591,9 +586,9 @@ export class PRNode extends TreeNode implements CommentHandler, vscode.Commentin
 			} catch (e) {
 				Logger.appendLine(`PR> Fetching file content failed: ${e}`);
 				vscode.window
-					.showWarningMessage('Opening this file locally failed. Would you like to view it on GitHub?', 'Open in GitHub')
+					.showWarningMessage('Opening this file locally failed. Would you like to view it on GitHub?', 'Open on GitHub')
 					.then(result => {
-						if (result === 'Open in GitHub') {
+						if (result === 'Open on GitHub') {
 							vscode.commands.executeCommand('vscode.open', vscode.Uri.parse(fileChange.blobUrl));
 						}
 					});

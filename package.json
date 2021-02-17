@@ -12,10 +12,10 @@
   },
   "enableProposedApi": true,
   "preview": true,
-  "version": "0.22.0",
+  "version": "0.23.1",
   "publisher": "GitHub",
   "engines": {
-    "vscode": "^1.53.0"
+    "vscode": "^1.53.2"
   },
   "categories": [
     "Other"
@@ -59,6 +59,7 @@
           }
         },
         "githubPullRequests.pullRequestTitle": {
+          "deprecationMessage": "The pull request title now uses the same defaults as GitHub, and can be edited before create.",
           "type": "string",
           "enum": [
             "commit",
@@ -76,6 +77,7 @@
           "description": "The title used when creating pull requests."
         },
         "githubPullRequests.pullRequestDescription": {
+          "deprecationMessage": "The pull request description now uses the same defaults as GitHub, and can be edited before create.",
           "type": "string",
           "enum": [
             "template",
@@ -362,7 +364,12 @@
         {
           "id": "github-pull-requests",
           "title": "GitHub",
-          "icon": "resources/icons/pull-request.png"
+          "icon": "$(github)"
+        },
+        {
+          "id": "github-pull-request",
+          "title": "GitHub Pull Request",
+          "icon": "$(git-pull-request)"
         }
       ]
     },
@@ -375,30 +382,19 @@
           "icon": "resources/icons/pull-request.png"
         },
         {
-          "id": "prStatus:github",
-          "name": "Changes In Pull Request",
-          "when": "github:inReviewMode",
-          "icon": "resources/icons/pull-request.png",
-          "visibility": "visible"
-        },
-        {
           "id": "pr:github",
           "name": "Pull Requests",
-          "when": "ReposManagerStateContext != NeedsAuthentication && !github:focusedReview && !github:createPullRequest",
+          "when": "ReposManagerStateContext != NeedsAuthentication",
           "icon": "resources/icons/pull-request.png"
-        },
-        {
-          "id": "github:activePullRequest",
-          "type": "webview",
-          "name": "Active Pull Request",
-          "when": "github:focusedReview"
         },
         {
           "id": "issues:github",
           "name": "Issues",
-          "when": "ReposManagerStateContext != NeedsAuthentication && !github:focusedReview &&!github:createPullRequest",
+          "when": "ReposManagerStateContext != NeedsAuthentication",
           "icon": "resources/icons/issues.png"
-        },
+        }
+      ],
+      "github-pull-request": [
         {
           "id": "github:createPullRequest",
           "type": "webview",
@@ -411,6 +407,19 @@
           "name": "Compare Changes",
           "when": "github:createPullRequest",
           "visibility": "visible"
+        },
+        {
+          "id": "prStatus:github",
+          "name": "Changes In Pull Request",
+          "when": "github:inReviewMode",
+          "icon": "resources/icons/pull-request.png",
+          "visibility": "visible"
+        },
+        {
+          "id": "github:activePullRequest",
+          "type": "webview",
+          "name": "Active Pull Request",
+          "when": "github:focusedReview"
         }
       ]
     },
@@ -418,13 +427,7 @@
       {
         "command": "pr.create",
         "title": "Create Pull Request",
-        "icon": "$(plus)",
-        "category": "GitHub Pull Requests"
-      },
-      {
-        "command": "pr.createDraft",
-        "title": "Create Draft Pull Request",
-        "icon": "$(plus)",
+        "icon": "$(git-pull-request-create)",
         "category": "GitHub Pull Requests"
       },
       {
@@ -459,8 +462,8 @@
         "category": "GitHub Pull Requests"
       },
       {
-        "command": "pr.openPullRequestInGitHub",
-        "title": "Open Pull Request in GitHub",
+        "command": "pr.openPullRequestOnGitHub",
+        "title": "Open Pull Request on GitHub",
         "category": "GitHub Pull Requests",
         "icon": "$(globe)"
       },
@@ -470,8 +473,8 @@
         "category": "GitHub Pull Requests"
       },
       {
-        "command": "pr.openFileInGitHub",
-        "title": "Open File in GitHub",
+        "command": "pr.openFileOnGitHub",
+        "title": "Open File on GitHub",
         "category": "GitHub Pull Requests"
       },
       {
@@ -499,7 +502,8 @@
         "command": "pr.openDescription",
         "title": "View Pull Request Description",
         "category": "GitHub Pull Requests",
-        "when": "github:inReviewMode"
+        "when": "github:inReviewMode",
+        "icon": "$(note)"
       },
       {
         "command": "pr.openDescriptionToTheSide",
@@ -603,7 +607,7 @@
         "command": "pr.deleteComment",
         "title": "Delete Comment",
         "category": "GitHub Pull Requests",
-        "icon": "$(close)"
+        "icon": "$(trash)"
       },
       {
         "command": "pr.finishReview",
@@ -620,6 +624,12 @@
         "command": "pr.configureRemotes",
         "title": "Configure Remotes...",
         "category": "GitHub Pull Requests"
+      },
+      {
+        "command": "pr.refreshActivePullRequest",
+        "title": "Refresh",
+        "category": "GitHub Pull Requests",
+        "icon": "$(refresh)"
       },
       {
         "command": "issue.createIssueFromSelection",
@@ -643,7 +653,7 @@
       },
       {
         "command": "issue.openGithubPermalink",
-        "title": "Open Permalink in GitHub",
+        "title": "Open Permalink on GitHub",
         "category": "GitHub Issues"
       },
       {
@@ -763,12 +773,7 @@
       {
         "view": "github:compareChanges",
         "when": "github:noUpstream",
-        "contents": "The current branch has no upstream remote\n[Publish branch](command:git.publish)"
-      },
-      {
-        "view": "github:compareChanges",
-        "when": "github:noCommitDifference",
-        "contents": "The are no commits between the base branch and the current branch"
+        "contents": "The comparing branch has no upstream remote\n[Publish branch](command:git.publish)"
       }
     ],
     "keybindings": [
@@ -818,10 +823,6 @@
           "when": "gitOpenRepositoryCount != 0 && github:authenticated"
         },
         {
-          "command": "pr.createDraft",
-          "when": "gitOpenRepositoryCount != 0 && github:authenticated"
-        },
-        {
           "command": "pr.merge",
           "when": "gitOpenRepositoryCount != 0 && github:inReviewMode"
         },
@@ -830,7 +831,7 @@
           "when": "gitOpenRepositoryCount != 0 && github:inReviewMode"
         },
         {
-          "command": "pr.openPullRequestInGitHub",
+          "command": "pr.openPullRequestOnGitHub",
           "when": "gitOpenRepositoryCount != 0 && github:inReviewMode"
         },
         {
@@ -838,7 +839,7 @@
           "when": "gitOpenRepositoryCount != 0 && github:inReviewMode"
         },
         {
-          "command": "pr.openFileInGitHub",
+          "command": "pr.openFileOnGitHub",
           "when": "false"
         },
         {
@@ -1016,6 +1017,10 @@
         {
           "command": "issue.goToLinkedCode",
           "when": "false"
+        },
+        {
+          "command": "pr.refreshActivePullRequest",
+          "when": "false"
         }
       ],
       "view/title": [
@@ -1060,9 +1065,19 @@
           "group": "navigation@1"
         },
         {
-          "command": "pr.openPullRequestInGitHub",
+          "command": "pr.refreshActivePullRequest",
           "when": "view == github:activePullRequest && github:hasGitHubRemotes",
-          "group": "navigation"
+          "group": "navigation@1"
+        },
+        {
+          "command": "pr.openDescription",
+          "when": "view == github:activePullRequest && github:hasGitHubRemotes",
+          "group": "navigation@2"
+        },
+        {
+          "command": "pr.openPullRequestOnGitHub",
+          "when": "view == github:activePullRequest && github:hasGitHubRemotes",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
@@ -1087,7 +1102,7 @@
           "group": "pullrequest@2"
         },
         {
-          "command": "pr.openPullRequestInGitHub",
+          "command": "pr.openPullRequestOnGitHub",
           "when": "view == pr:github && viewItem =~ /pullrequest|description/",
           "group": "pullrequest@3"
         },
@@ -1097,7 +1112,7 @@
           "group": "pullrequest@4"
         },
         {
-          "command": "pr.openFileInGitHub",
+          "command": "pr.openFileOnGitHub",
           "when": "view =~ /(pr|prStatus):github/ && viewItem =~ /filechange/"
         },
         {
@@ -1424,6 +1439,7 @@
     "tunnel": "0.0.6",
     "uuid": "^3.3.3",
     "vscode-extension-telemetry": "^0.1.3",
+    "vscode-tas-client": "^0.1.17",
     "vsls": "^0.3.967"
   },
   "optionalDependencies": {

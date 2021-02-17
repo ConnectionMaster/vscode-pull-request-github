@@ -5,6 +5,7 @@
 'use strict';
 
 import * as vscode from 'vscode';
+import * as path from 'path';
 import TelemetryReporter from 'vscode-extension-telemetry';
 import { Repository } from './api/api';
 import { GitApiImpl } from './api/api1';
@@ -28,6 +29,8 @@ import { RepositoriesManager } from './github/repositoriesManager';
 import { PullRequestChangesTreeDataProvider } from './view/prChangesTreeDataProvider';
 import { ReviewsManager } from './view/reviewsManager';
 import { registerLiveShareGitProvider } from './gitProviders/api';
+import { GitLensIntegration } from './integrations/gitlens/gitlensImpl';
+import { ExperimentationTelemetry } from './experimentationService';
 
 const aiKey: string = 'AIF-d9b70cd4-b9f9-4d70-929b-a071c400b217';
 
@@ -36,7 +39,10 @@ const fetch = require('node-fetch');
 const PolyfillPromise = require('es6-promise').Promise;
 fetch.Promise = PolyfillPromise;
 
-let telemetry: TelemetryReporter;
+let telemetry: ExperimentationTelemetry;
+
+const PROMPTS_SCOPE = 'prompts';
+const PROMPT_TO_CREATE_PR_ON_PUBLISH_KEY = 'createPROnPublish';
 
 async function init(context: vscode.ExtensionContext, git: GitApiImpl, credentialStore: CredentialStore, repositories: Repository[], tree: PullRequestsTreeDataProvider, liveshareApiPromise: Promise<LiveShare | undefined>): Promise<void> {
 	context.subscriptions.push(Logger);
@@ -50,6 +56,27 @@ async function init(context: vscode.ExtensionContext, git: GitApiImpl, credentia
 			}
 		}
 	});
+
+	context.subscriptions.push(git.onDidPublish(async e => {
+		// Only notify on branch publish events
+		if (!e.branch || PersistentState.fetch(PROMPTS_SCOPE, PROMPT_TO_CREATE_PR_ON_PUBLISH_KEY) === false) {
+			return;
+		}
+
+		const reviewManager = reviewManagers.find(manager => manager.repository.rootUri.toString() === e.repository.rootUri.toString());
+		if (reviewManager?.isCreatingPullRequest) {
+			return;
+		}
+
+		const create = 'Create Pull Request...';
+		const dontShowAgain = 'Don\'t Show Again';
+		const result = await vscode.window.showInformationMessage(`Would you like to create a Pull Request for branch '${e.branch}'?`, create, dontShowAgain);
+		if (result === create) {
+			void vscode.commands.executeCommand('pr.create');
+		} else if (result === dontShowAgain) {
+			PersistentState.store(PROMPTS_SCOPE, PROMPT_TO_CREATE_PR_ON_PUBLISH_KEY, false);
+		}
+	}));
 
 	context.subscriptions.push(vscode.window.registerUriHandler(uriHandler));
 	context.subscriptions.push(new FileTypeDecorationProvider());
@@ -126,6 +153,8 @@ async function init(context: vscode.ExtensionContext, git: GitApiImpl, credentia
 	context.subscriptions.push(issuesFeatures);
 	await issuesFeatures.initialize();
 
+	context.subscriptions.push(new GitLensIntegration());
+
 	/* __GDPR__
 		"startup" : {}
 	*/
@@ -133,12 +162,19 @@ async function init(context: vscode.ExtensionContext, git: GitApiImpl, credentia
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<GitApiImpl> {
+	if (path.basename(context.globalStorageUri.fsPath) === 'github.vscode-pull-request-github-insiders') {
+		const stable = vscode.extensions.getExtension('github.vscode-pull-request-github');
+		if (stable !== undefined) {
+			throw new Error('GitHub Pull Requests and Issues Nightly cannot be used while GitHub Pull Requests and Issues is also installed. Please ensure that only one version of the extension is installed.');
+		}
+	}
+
 	// initialize resources
 	Resource.initialize(context);
 	const apiImpl = new GitApiImpl();
 
 	const version = vscode.extensions.getExtension(EXTENSION_ID)!.packageJSON.version;
-	telemetry = new TelemetryReporter(EXTENSION_ID, version, aiKey);
+	telemetry = new ExperimentationTelemetry(new TelemetryReporter(EXTENSION_ID, version, aiKey));
 	context.subscriptions.push(telemetry);
 
 	PersistentState.init(context);

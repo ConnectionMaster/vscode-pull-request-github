@@ -47,22 +47,12 @@ function ensurePR(folderRepoManager: FolderRepositoryManager, pr?: PRNode | Pull
 export async function openDescription(
 	context: vscode.ExtensionContext,
 	telemetry: ITelemetry,
-	argument: DescriptionNode | PullRequestModel,
-	folderManager: FolderRepositoryManager,
-	reviewManager: ReviewManager
+	pullRequestModel: PullRequestModel,
+	descriptionNode: DescriptionNode | undefined,
+	folderManager: FolderRepositoryManager
 ) {
-	const pullRequestModel = argument instanceof DescriptionNode ? argument.pullRequestModel : argument;
-	let descriptionNode: DescriptionNode;
-	if (!(argument instanceof DescriptionNode)) {
-		// the command is triggered from command palette or status bar, which means we are already in checkout mode.
-		const rootNodes = await reviewManager.changesInPrDataProvider.getChildren();
-		descriptionNode = rootNodes[0] as DescriptionNode;
-	} else {
-		descriptionNode = argument;
-	}
-
 	const pullRequest = ensurePR(folderManager, pullRequestModel);
-	descriptionNode.reveal(descriptionNode, { select: true, focus: true });
+	descriptionNode?.reveal(descriptionNode, { select: true, focus: true });
 	// Create and show a new webview
 	PullRequestOverviewPanel.createOrShow(context.extensionPath, folderManager, pullRequest);
 
@@ -72,7 +62,7 @@ export async function openDescription(
 	telemetry.sendTelemetryEvent('pr.openDescription');
 }
 
-async function chooseItem<T>(activePullRequests: T[], propertyGetter: (itemValue: T) => string, placeHolder?: string): Promise<T | undefined> {
+async function chooseItem<T>(activePullRequests: T[], propertyGetter: (itemValue: T) => string, options?: vscode.QuickPickOptions): Promise<T | undefined> {
 	if (activePullRequests.length === 1) {
 		return activePullRequests[0];
 	}
@@ -85,7 +75,7 @@ async function chooseItem<T>(activePullRequests: T[], propertyGetter: (itemValue
 			itemValue: currentItem
 		};
 	});
-	return (await vscode.window.showQuickPick(items, { placeHolder }))?.itemValue;
+	return (await vscode.window.showQuickPick(items, options))?.itemValue;
 }
 
 export function registerCommands(context: vscode.ExtensionContext, reposManager: RepositoriesManager, reviewManagers: ReviewManager[], telemetry: ITelemetry, credentialStore: CredentialStore, tree: PullRequestsTreeDataProvider) {
@@ -94,7 +84,7 @@ export function registerCommands(context: vscode.ExtensionContext, reposManager:
 		credentialStore.logout();
 	}));
 
-	context.subscriptions.push(vscode.commands.registerCommand('pr.openPullRequestInGitHub', async (e: PRNode | DescriptionNode | PullRequestModel) => {
+	context.subscriptions.push(vscode.commands.registerCommand('pr.openPullRequestOnGitHub', async (e: PRNode | DescriptionNode | PullRequestModel) => {
 		if (!e) {
 			const activePullRequests: PullRequestModel[] = reposManager.folderManagers.map(folderManager => folderManager.activePullRequest!).filter(activePR => !!activePR);
 
@@ -166,7 +156,7 @@ export function registerCommands(context: vscode.ExtensionContext, reposManager:
 		}
 	}));
 
-	context.subscriptions.push(vscode.commands.registerCommand('pr.openFileInGitHub', (e: GitFileChangeNode) => {
+	context.subscriptions.push(vscode.commands.registerCommand('pr.openFileOnGitHub', (e: GitFileChangeNode) => {
 		vscode.commands.executeCommand('vscode.open', vscode.Uri.parse(e.blobUrl!));
 	}));
 
@@ -244,16 +234,29 @@ export function registerCommands(context: vscode.ExtensionContext, reposManager:
 		}
 	}));
 
-	function chooseReviewManager() {
-		return chooseItem<ReviewManager>(reviewManagers, (itemValue) => pathLib.basename(itemValue.repository.rootUri.fsPath));
+	function chooseReviewManager(repoPath?: string) {
+		if (repoPath) {
+			const uri = vscode.Uri.file(repoPath).toString();
+			for (const mgr of reviewManagers) {
+				if (mgr.repository.rootUri.toString() === uri) {
+					return mgr;
+				}
+			}
+		}
+		return chooseItem<ReviewManager>(reviewManagers, (itemValue) => pathLib.basename(itemValue.repository.rootUri.fsPath), { placeHolder: 'Choose a repository to create a pull request in', ignoreFocusOut: true });
 	}
 
-	context.subscriptions.push(vscode.commands.registerCommand('pr.create', async () => {
-		(await chooseReviewManager())?.createPullRequest();
-	}));
+	function isSourceControl(x: any): x is { rootUri: vscode.Uri } {
+		return !!x.rootUri;
+	}
 
-	context.subscriptions.push(vscode.commands.registerCommand('pr.createDraft', async () => {
-		(await chooseReviewManager())?.createPullRequest(true);
+	context.subscriptions.push(vscode.commands.registerCommand('pr.create', async (args?: { repoPath: string; compareBranch: string; } | { rootUri: vscode.Uri }) => {
+		// The arguments this is called with are either from the SCM view, or manually passed.
+		if (args && isSourceControl(args)) {
+			(await chooseReviewManager(args.rootUri.fsPath))?.createPullRequest();
+		} else {
+			(await chooseReviewManager(args?.repoPath))?.createPullRequest(args?.compareBranch);
+		}
 	}));
 
 	context.subscriptions.push(vscode.commands.registerCommand('pr.pick', async (pr: PRNode | DescriptionNode | PullRequestModel) => {
@@ -361,7 +364,7 @@ export function registerCommands(context: vscode.ExtensionContext, reposManager:
 			const activePullRequests: PullRequestModel[] = reposManager.folderManagers.map(folderManager => folderManager.activePullRequest!).filter(activePR => !!activePR);
 			pullRequestModel = await chooseItem<PullRequestModel>(activePullRequests,
 				(itemValue) => `${itemValue.number}: ${itemValue.title}`,
-				'Pull request to close');
+				{ placeHolder: 'Pull request to close' });
 		}
 		if (!pullRequestModel) {
 			return;
@@ -389,19 +392,40 @@ export function registerCommands(context: vscode.ExtensionContext, reposManager:
 		});
 	}));
 
-	context.subscriptions.push(vscode.commands.registerCommand('pr.openDescription', async (argument: DescriptionNode | PullRequestModel) => {
-		const pullRequestModel = argument instanceof DescriptionNode ? argument.pullRequestModel : argument;
+	context.subscriptions.push(vscode.commands.registerCommand('pr.openDescription', async (argument: DescriptionNode | PullRequestModel | undefined) => {
+		let pullRequestModel: PullRequestModel | undefined;
+		if (!argument) {
+			const activePullRequests: PullRequestModel[] = reposManager.folderManagers.map(manager => manager.activePullRequest!).filter(activePR => !!activePR);
+			if (activePullRequests.length >= 1) {
+				pullRequestModel = await chooseItem<PullRequestModel>(activePullRequests, (itemValue) => itemValue.title);
+			}
+		} else {
+			pullRequestModel = argument instanceof DescriptionNode ? argument.pullRequestModel : argument;
+		}
+
+		if (!pullRequestModel) {
+			Logger.appendLine('No pull request found.');
+			return;
+		}
+
 		const folderManager = reposManager.getManagerForIssueModel(pullRequestModel);
 		if (!folderManager) {
 			return;
 		}
 
-		const reviewManager = await ReviewManager.getReviewManagerForFolderManager(reviewManagers, folderManager);
-		if (!reviewManager) {
-			return;
+		let descriptionNode: DescriptionNode | undefined;
+		if (argument instanceof DescriptionNode) {
+			descriptionNode = argument;
+		} else {
+			const reviewManager = await ReviewManager.getReviewManagerForFolderManager(reviewManagers, folderManager);
+			if (!reviewManager) {
+				return;
+			}
+
+			descriptionNode = reviewManager.changesInPrDataProvider.getDescriptionNode(folderManager);
 		}
 
-		await openDescription(context, telemetry, argument, folderManager, reviewManager);
+		await openDescription(context, telemetry, pullRequestModel, descriptionNode, folderManager);
 	}));
 
 	context.subscriptions.push(vscode.commands.registerCommand('pr.refreshDescription', async () => {

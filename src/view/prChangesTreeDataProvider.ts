@@ -10,6 +10,7 @@ import { IComment } from '../common/comment';
 import { FolderRepositoryManager, SETTINGS_NAMESPACE } from '../github/folderRepositoryManager';
 import { PullRequestModel } from '../github/pullRequestModel';
 import { RepositoryChangesNode } from './treeNodes/repositoryChangesNode';
+import { DescriptionNode } from './treeNodes/descriptionNode';
 
 export class PullRequestChangesTreeDataProvider extends vscode.Disposable implements vscode.TreeDataProvider<TreeNode> {
 	private _onDidChangeTreeData = new vscode.EventEmitter<void>();
@@ -58,7 +59,7 @@ export class PullRequestChangesTreeDataProvider extends vscode.Disposable implem
 		this._view.title = pullRequestNumber ? `Changes in Pull Request #${pullRequestNumber}` : 'Changes in Pull Request';
 	}
 
-	async addPrToView(pullRequestManager: FolderRepositoryManager, pullRequest: PullRequestModel, localFileChanges: (GitFileChangeNode | RemoteFileChangeNode)[], comments: IComment[]) {
+	async addPrToView(pullRequestManager: FolderRepositoryManager, pullRequest: PullRequestModel, localFileChanges: (GitFileChangeNode | RemoteFileChangeNode)[], comments: IComment[], shouldReveal: boolean) {
 		const node: RepositoryChangesNode = new RepositoryChangesNode(this._view, pullRequest, pullRequestManager, comments, localFileChanges);
 		this._pullRequestManagerMap.set(pullRequestManager, node);
 		this.updateViewTitle();
@@ -69,6 +70,10 @@ export class PullRequestChangesTreeDataProvider extends vscode.Disposable implem
 			true
 		);
 		this._onDidChangeTreeData.fire();
+
+		if (shouldReveal) {
+			this._view.reveal(node);
+		}
 	}
 
 	async removePrFromView(pullRequestManager: FolderRepositoryManager) {
@@ -112,6 +117,10 @@ export class PullRequestChangesTreeDataProvider extends vscode.Disposable implem
 		} else {
 			return await element.getChildren();
 		}
+	}
+
+	getDescriptionNode(folderRepoManager: FolderRepositoryManager): DescriptionNode | undefined {
+		return this._pullRequestManagerMap.get(folderRepoManager);
 	}
 
 	async resolveTreeItem?(item: vscode.TreeItem, element: TreeNode): Promise<vscode.TreeItem> {

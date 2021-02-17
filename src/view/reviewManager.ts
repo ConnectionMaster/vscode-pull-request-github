@@ -55,6 +55,13 @@ export class ReviewManager {
 
 	private _switchingToReviewMode: boolean;
 
+	/**
+	 * Flag set when the "Checkout" action is used and cleared on the next git
+	 * state update, once review mode has been entered. Used to disambiguate
+	 * explicit user action from something like reloading on an existing PR branch.
+	 */
+	private justSwitchedToRevieMode: boolean = false;
+
 	public get switchingToReviewMode(): boolean {
 		return this._switchingToReviewMode;
 	}
@@ -275,7 +282,8 @@ export class ReviewManager {
 
 		Logger.appendLine('Review> Fetching pull request data');
 		await this.getPullRequestData(pr);
-		await this.changesInPrDataProvider.addPrToView(this._folderRepoManager, pr, this._localFileChanges, this._comments);
+		await this.changesInPrDataProvider.addPrToView(this._folderRepoManager, pr, this._localFileChanges, this._comments, this.justSwitchedToRevieMode);
+		this.justSwitchedToRevieMode = false;
 
 		Logger.appendLine(`Review> register comments provider`);
 		await this.registerCommentController();
@@ -283,6 +291,9 @@ export class ReviewManager {
 		if (!this._webviewViewProvider) {
 			this._webviewViewProvider = new PullRequestViewProvider(this._context.extensionUri, this._folderRepoManager, pr);
 			this._context.subscriptions.push(vscode.window.registerWebviewViewProvider(this._webviewViewProvider.viewType, this._webviewViewProvider));
+			this._context.subscriptions.push(vscode.commands.registerCommand('pr.refreshActivePullRequest', _ => {
+				this._webviewViewProvider?.refresh();
+			}));
 
 			if (!silent && this._context.workspaceState.get(FOCUS_REVIEW_MODE) && vscode.env.remoteName === 'codespaces') {
 				this._webviewViewProvider.show();
@@ -511,6 +522,7 @@ export class ReviewManager {
 			Logger.appendLine(`Review> switch to Pull Request #${pr.number} - done`, ReviewManager.ID);
 		} finally {
 			this.switchingToReviewMode = false;
+			this.justSwitchedToRevieMode = true;
 			this.statusBarItem.text = `Pull Request #${pr.number}`;
 			this.statusBarItem.command = undefined;
 			this.statusBarItem.show();
@@ -577,7 +589,7 @@ export class ReviewManager {
 							modal: true
 						});
 
-						resolve();
+						resolve(undefined);
 					}
 
 					if (err.gitErrorCode === GitErrorCodes.RemoteConnectionError) {
@@ -585,7 +597,7 @@ export class ReviewManager {
 							modal: true
 						});
 
-						resolve();
+						resolve(undefined);
 					}
 
 					// we can't handle the error
@@ -595,7 +607,7 @@ export class ReviewManager {
 				// we don't want to wait for repository status update
 				const latestBranch = await this._repository.getBranch(branch.name!);
 				if (!latestBranch || !latestBranch.upstream) {
-					resolve();
+					resolve(undefined);
 				}
 
 				resolve(latestBranch);
@@ -650,16 +662,21 @@ export class ReviewManager {
 		return selected;
 	}
 
-	public async createPullRequest(isDraft?: boolean): Promise<void> {
+	public async createPullRequest(compareBranch?: string): Promise<void> {
 		if (!this._createPullRequestHelper) {
 			this._createPullRequestHelper = new CreatePullRequestHelper(this.repository);
 			this._createPullRequestHelper.onDidCreate(async createdPR => {
 				await this.updateState();
-				await openDescription(this._context, this._telemetry, createdPR, this._folderRepoManager, this);
+				const descriptionNode = this.changesInPrDataProvider.getDescriptionNode(this._folderRepoManager);
+				await openDescription(this._context, this._telemetry, createdPR, descriptionNode, this._folderRepoManager);
 			});
 		}
 
-		this._createPullRequestHelper.create(this._context.extensionUri, this._folderRepoManager, !!isDraft);
+		this._createPullRequestHelper.create(this._context.extensionUri, this._folderRepoManager, compareBranch);
+	}
+
+	get isCreatingPullRequest() {
+		return this._createPullRequestHelper?.isCreatingPullRequest ?? false;
 	}
 
 	private updateFocusedViewMode(): void {
